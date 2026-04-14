@@ -42,10 +42,12 @@ download_binary() {
     local url="https://github.com/${REPO}/releases/download/${tag}/${name}"
 
     echo -e "⬇️  Baixando \e[1;36m${name}\e[0m (${tag})..."
+    # -4 força IPv4 (alguns edges CDN do GH retornam "Not Found" via IPv6).
     # -L segue redirects (releases do GH redirecionam pra objects.githubusercontent.com).
     # -A força UA de browser — alguns CDNs do GH bloqueiam UA padrão de curl.
-    # --retry 5 cobre transient 404 do CDN logo após uma release ser publicada.
-    if ! curl -L -A "Mozilla/5.0" --retry 5 --retry-delay 2 --retry-all-errors \
+    # --retry 10 cobre transient 404/timeout logo após uma release ser publicada.
+    # NÃO usa --retry-all-errors (não existe em curl antigo do Debian 10/Ubuntu 18).
+    if ! curl -4 -L -A "Mozilla/5.0" --retry 10 --retry-delay 3 \
             -o "$BINARY_PATH" "$url"; then
         echo -e "\e[1;31mFalha no download de ${url}\e[0m"
         return 1
