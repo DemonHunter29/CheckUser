@@ -21,7 +21,7 @@ import (
 // em intervalos de keep-alive (que podem ser mais longos que o TTL).
 const (
 	dtprotoStatsPath = "/var/lib/proto-server/stats.json"
-	hcpStatsPath     = "/var/lib/hcp/stats.json"
+	hcpStatsPath     = "/var/lib/hcp-server/stats.json"
 )
 
 // buildCountChain monta a cadeia: SSH → OpenVPN → DTProto → HCP.
