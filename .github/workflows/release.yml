@@ -1,12 +1,15 @@
-name: Latest Release
+name: Release
 
 on:
   push:
-    branches: ['master']
+    tags: ['v*']
+
+permissions:
+  contents: write
 
 jobs:
   release:
-    name: Build and Create Release
+    name: Build and Publish
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -17,7 +20,7 @@ jobs:
           - linux/amd64
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -27,37 +30,29 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Extract Build Info
+      - name: Build info
         id: buildinfo
         run: |
           GOOSARCH="${{ matrix.goosarch }}"
           GOOS="${GOOSARCH%%/*}"
           GOARCH="${GOOSARCH##*/}"
-          VERSION=$(grep -oP 'version\s*=\s*"\K[^"]+' ./src/main.go)
           BINARY_NAME="checkuser-${GOOS}-${GOARCH}"
-          echo "goos=${GOOS}" >> "$GITHUB_OUTPUT"
+          echo "goos=${GOOS}"   >> "$GITHUB_OUTPUT"
           echo "goarch=${GOARCH}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "binary=${BINARY_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Build Binary
+      - name: Build
         env:
-          GOOS: ${{ steps.buildinfo.outputs.goos }}
-          GOARCH: ${{ steps.buildinfo.outputs.goarch }}
+          GOOS:        ${{ steps.buildinfo.outputs.goos }}
+          GOARCH:      ${{ steps.buildinfo.outputs.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -ldflags="-s -w" -o "${{ steps.buildinfo.outputs.binary }}" -v ./src
+          go build -trimpath -ldflags="-s -w -buildid=" \
+            -o "${{ steps.buildinfo.outputs.binary }}" ./src
 
-      - name: Generate Release Notes
-        run: |
-          git log "$(git describe --tags --abbrev=0 HEAD^)"..HEAD \
-            --pretty='* %h %s (%an)' --no-merges > .github/RELEASE-TEMPLATE.md
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.buildinfo.outputs.version }}
-          body_path: .github/RELEASE-TEMPLATE.md
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
           files: ${{ steps.buildinfo.outputs.binary }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN }}

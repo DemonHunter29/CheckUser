@@ -1,73 +1,94 @@
 #!/bin/bash
 #
 # CheckUser — installer
+# Uso: bash <(curl -sL https://raw.githubusercontent.com/DemonHunter29/CheckUser/master/install.sh)
 #
-# Assume que o binário 'checkuser' já foi buildado e copiado para a VPS
-# (ou está no diretório atual). Para fazer o build:
-#
-#   go build -ldflags="-w -s -buildid=" -trimpath -o checkuser ./src
-#
-# Uso:
-#   sudo bash install.sh
 
-set -e
-
+REPO="DemonHunter29/CheckUser"
 SERVICE_NAME="checkuser"
 BINARY_PATH="/usr/local/bin/${SERVICE_NAME}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-DEFAULT_PORT="5000"
+DEFAULT_PORT="2052"
 
-color() { echo -e "\e[1;$1m$2\e[0m"; }
-
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        color 31 "Execute como root (sudo)."
-        exit 1
-    fi
+get_arch() {
+    case "$(uname -m)" in
+        x86_64 | x64 | amd64)      echo 'amd64' ;;
+        armv8 | arm64 | aarch64)   echo 'arm64' ;;
+        armv7l | armv7 | arm)      echo 'arm' ;;
+        *)                         echo 'unsupported' ;;
+    esac
 }
 
-find_binary() {
-    for candidate in "./checkuser" "./${SERVICE_NAME}" "$(dirname "$0")/checkuser"; do
-        if [[ -x "$candidate" ]]; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-    return 1
+latest_tag() {
+    curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+        | grep -Po '"tag_name"\s*:\s*"\K[^"]+' \
+        | head -n1
 }
 
-install_binary() {
-    local src
-    src=$(find_binary) || true
-    if [[ -z "$src" ]]; then
-        color 31 "Binário 'checkuser' não encontrado no diretório atual."
-        echo "Faça o build primeiro:"
-        echo "  go build -ldflags=\"-w -s -buildid=\" -trimpath -o checkuser ./src"
-        exit 1
+download_binary() {
+    local arch=$(get_arch)
+    if [ "$arch" = "unsupported" ]; then
+        echo -e "\e[1;31mArquitetura de CPU não suportada: $(uname -m)\e[0m"
+        return 1
     fi
 
-    color 36 "Instalando $src → $BINARY_PATH..."
-    install -m 755 "$src" "$BINARY_PATH"
+    local tag=$(latest_tag)
+    if [ -z "$tag" ]; then
+        echo -e "\e[1;31mNão foi possível descobrir a release mais recente.\e[0m"
+        return 1
+    fi
+
+    local name="checkuser-linux-${arch}"
+    local url="https://github.com/${REPO}/releases/download/${tag}/${name}"
+
+    echo -e "⬇️  Baixando \e[1;36m${name}\e[0m (${tag})..."
+    if ! curl -fsSL "$url" -o "$BINARY_PATH"; then
+        echo -e "\e[1;31mFalha no download de ${url}\e[0m"
+        return 1
+    fi
+    chmod +x "$BINARY_PATH"
 }
 
-open_port() {
-    local port=$1
-    if command -v ufw &>/dev/null && ufw status | grep -q active; then
-        ufw allow "$port"/tcp &>/dev/null || true
+check_url_access() {
+    local test_url=$1
+    echo -e "\n🔍 Testando acesso externo a: $test_url"
+    if curl -s --max-time 5 "$test_url" >/dev/null; then
+        echo -e "\e[1;32m✅ A URL está acessível externamente.\e[0m"
+        return
     fi
-    if command -v iptables &>/dev/null; then
-        iptables -C INPUT -p tcp --dport "$port" -j ACCEPT &>/dev/null || \
-            iptables -I INPUT -p tcp --dport "$port" -j ACCEPT
+
+    echo -e "\e[1;31m❌ Não foi possível acessar a URL externamente.\e[0m"
+    echo -ne "\e[1;33mDeseja abrir a porta no iptables automaticamente? [s/N]: \e[0m"
+    read answer
+
+    if [[ "$answer" =~ ^[Ss]$ ]]; then
+        local port=$(echo "$test_url" | grep -oE ':[0-9]+' | tr -d ':')
+        sudo iptables -I INPUT -p tcp --dport "$port" -j ACCEPT
+        sudo iptables-save > /etc/iptables.rules 2>/dev/null || true
+        echo -e "\e[1;32m✔ Porta $port liberada no iptables.\e[0m"
+        return
     fi
+
+    echo -e "\e[1;33m⚠ Porta não foi aberta. Faça isso manualmente se necessário.\e[0m"
 }
 
-write_service() {
-    local port=$1
-    local ssl_flag=$2
+install_service() {
+    download_binary || exit 1
 
-    cat > "$SERVICE_FILE" <<EOF
+    local port=$DEFAULT_PORT
+    local sslEnabled=""
+    local proto="http"
+    local addr=$(curl -s https://ipv4.icanhazip.com)
+
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo "🛑 Parando serviço $SERVICE_NAME..."
+        systemctl stop "$SERVICE_NAME"
+        systemctl disable "$SERVICE_NAME" &>/dev/null
+    fi
+
+    cat << EOF | tee "$SERVICE_FILE" > /dev/null
 [Unit]
-Description=CheckUser service
+Description=CheckUser Service
 After=network.target nss-lookup.target
 
 [Service]
@@ -75,7 +96,7 @@ User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=${BINARY_PATH} --start --port ${port} ${ssl_flag}
+ExecStart=${BINARY_PATH} --start --port ${port} ${sslEnabled}
 Restart=always
 RestartSec=3
 
@@ -83,92 +104,70 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
+    systemctl daemon-reload &>/dev/null
     systemctl enable "$SERVICE_NAME" &>/dev/null
-    systemctl restart "$SERVICE_NAME"
-}
+    systemctl start "$SERVICE_NAME"
 
-cmd_install() {
-    check_root
+    local final_url="${proto}://${addr}:${port}"
+    echo -e "\n\e[1;32m✅ CheckUser instalado com sucesso!\e[0m"
+    echo -e "\e[1;34m🌐 URL: \e[1;36m${final_url}\e[0m"
 
-    local port ssl_flag
-    echo -ne "Porta [${DEFAULT_PORT}]: "
-    read port
-    port=${port:-$DEFAULT_PORT}
+    check_url_access "$final_url"
 
-    echo -ne "Habilitar SSL (cert.pem/key.pem no dir atual)? [s/N]: "
-    read ans
-    if [[ "$ans" =~ ^[Ss]$ ]]; then
-        ssl_flag="--ssl"
-    else
-        ssl_flag=""
-    fi
-
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        systemctl stop "$SERVICE_NAME"
-    fi
-
-    install_binary
-    open_port "$port"
-    write_service "$port" "$ssl_flag"
-
-    local addr
-    addr=$(curl -s --max-time 5 https://api.ipify.org || hostname -I | awk '{print $1}')
-    local proto="http"
-    [[ -n "$ssl_flag" ]] && proto="https"
-
-    color 32 "OK  Serviço '${SERVICE_NAME}' instalado."
-    color 36 "URL: ${proto}://${addr}:${port}"
-    systemctl status "$SERVICE_NAME" --no-pager | head -n 5
-}
-
-cmd_uninstall() {
-    check_root
-    systemctl stop "$SERVICE_NAME" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME" &>/dev/null || true
-    rm -f "$SERVICE_FILE" "$BINARY_PATH"
-    systemctl daemon-reload
-    color 31 "OK  Serviço '${SERVICE_NAME}' removido."
-}
-
-cmd_status() {
-    systemctl status "$SERVICE_NAME" --no-pager
-}
-
-menu() {
-    clear
-    echo "--------------------------------"
-    echo "   CheckUser  -  installer"
-    if [[ -x "$BINARY_PATH" ]]; then
-        echo "   v$("$BINARY_PATH" --version | awk '{print $2}')"
-    else
-        color 31 "   [NAO INSTALADO]"
-    fi
-    echo "--------------------------------"
-    echo " 1) Instalar / atualizar"
-    echo " 2) Remover"
-    echo " 3) Status"
-    echo " 0) Sair"
-    echo "--------------------------------"
-    echo -ne "Opcao: "
-    read opt
-
-    case "$opt" in
-        1) cmd_install ;;
-        2) cmd_uninstall ;;
-        3) cmd_status ;;
-        0) exit 0 ;;
-        *) color 31 "Opcao invalida." ;;
-    esac
-    echo
-    echo "Pressione Enter..."
+    echo -e "\nPressione Enter para continuar..."
     read
-    menu
 }
 
-case "${1:-}" in
-    install)   cmd_install ;;
-    uninstall) cmd_uninstall ;;
-    status)    cmd_status ;;
-    *)         menu ;;
-esac
+reinstall_service() {
+    echo "♻️  Reinstalando CheckUser..."
+    systemctl stop "$SERVICE_NAME" &>/dev/null
+    systemctl disable "$SERVICE_NAME" &>/dev/null
+    rm -f "$BINARY_PATH" "$SERVICE_FILE"
+    systemctl daemon-reload &>/dev/null
+    install_service
+}
+
+uninstall_service() {
+    echo "🧹 Desinstalando CheckUser..."
+    systemctl stop "$SERVICE_NAME" &>/dev/null
+    systemctl disable "$SERVICE_NAME" &>/dev/null
+    rm -f "$BINARY_PATH" "$SERVICE_FILE"
+    systemctl daemon-reload &>/dev/null
+    echo -e "\e[1;31m✔ CheckUser removido.\e[0m"
+    echo -e "\nPressione Enter para continuar..."
+    read
+}
+
+main() {
+    clear
+    echo '---------------------------------'
+    echo -ne '     \e[1;33mCHECKUSER\e[0m'
+    if [[ -x "$BINARY_PATH" ]]; then
+        echo -e ' \e[1;32mv'$("$BINARY_PATH" --version | awk '{print $2}')'\e[0m'
+    else
+        echo -e ' \e[1;31m[DESINSTALADO]\e[0m'
+    fi
+    echo '---------------------------------'
+    echo -e '\e[1;32m[01] - \e[1;31mINSTALAR CHECKUSER\e[0m'
+    echo -e '\e[1;32m[02] - \e[1;31mREINSTALAR CHECKUSER\e[0m'
+    echo -e '\e[1;32m[03] - \e[1;31mDESINSTALAR CHECKUSER\e[0m'
+    echo -e '\e[1;32m[00] - \e[1;31mSAIR\e[0m'
+    echo '---------------------------------'
+    echo -ne '\e[1;32mEscolha uma opção: \e[0m'
+    read option
+
+    case $option in
+        1) install_service; main ;;
+        2) reinstall_service; main ;;
+        3) uninstall_service; main ;;
+        0) echo "Saindo." ;;
+        *) echo -e "\e[1;31mOpção inválida. Tente novamente.\e[0m"; read; main ;;
+    esac
+}
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Execute como root (sudo)."
+    exit 1
+fi
+
+main
