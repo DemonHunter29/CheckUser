@@ -1,6 +1,7 @@
 package user_use_case
 
 import (
+	"log"
 	"time"
 
 	"github.com/DemonHunter29/CheckUser/src/domain/contract"
@@ -32,12 +33,16 @@ func NewDetailUserUseCase(
 }
 
 func (c *DetailUserUseCase) Execute(ctx context.Context, username string) (*DetailUserOutput, error) {
+	log.Printf("[details] Execute: username=%q", username)
 	user, err := c.userRepository.FindByUsername(ctx, username)
 	if err != nil {
+		log.Printf("[details] FindByUsername error: %v", err)
 		return nil, err
 	}
 
+	log.Printf("[details] calling countConnection.ByUsername for %q", user.Username)
 	connections, err := c.countConnection.ByUsername(ctx, user.Username)
+	log.Printf("[details] countConnection returned: connections=%d err=%v", connections, err)
 	if err != nil {
 		connections = 0
 	}

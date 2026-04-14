@@ -1,6 +1,8 @@
 package factory
 
 import (
+	"log"
+
 	"github.com/DemonHunter29/CheckUser/src/data"
 	"github.com/DemonHunter29/CheckUser/src/data/cache"
 	"github.com/DemonHunter29/CheckUser/src/data/connection"
@@ -24,22 +26,21 @@ const (
 	hcpStatsPath     = "/var/lib/hcp-server/stats.json"
 )
 
-// buildCountChain monta a cadeia: SSH → OpenVPN → DTProto → HCP.
+// buildCountChain monta a cadeia: SSH → DTProto → HCP.
 // Cada handler soma sua contagem antes de delegar ao próximo.
+//
+// OpenVPN foi retirado: o net.Dial pra 127.0.0.1:7505 não tem timeout e
+// pode travar a chain inteira quando o port não responde (firewall DROP).
 func buildCountChain(executor contract.Executor) contract.CountConnection {
 	countSSH := connection.NewSSHConnection(executor)
 
-	countOvpn := connection.NewOpenVPNConnection(
-		connection.NewAUXOpenVPNConnection("127.0.0.1", 7505),
-	)
-	countSSH.SetNext(countOvpn)
-
 	countDtProto := connection.NewStatsFileConnection(dtprotoStatsPath, 0)
-	countOvpn.SetNext(countDtProto)
+	countSSH.SetNext(countDtProto)
 
 	countHcp := connection.NewStatsFileConnection(hcpStatsPath, 0)
 	countDtProto.SetNext(countHcp)
 
+	log.Printf("[chain] SSH → DTProto(%s) → HCP(%s)", dtprotoStatsPath, hcpStatsPath)
 	return countSSH
 }
 
