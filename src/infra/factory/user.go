@@ -1,8 +1,6 @@
 package factory
 
 import (
-	"time"
-
 	"github.com/DemonHunter29/CheckUser/src/data"
 	"github.com/DemonHunter29/CheckUser/src/data/cache"
 	"github.com/DemonHunter29/CheckUser/src/data/connection"
@@ -16,11 +14,14 @@ import (
 
 // Caminhos dos stats.json por protocolo. Se o arquivo não existir no server
 // (protocolo não instalado) o counter silenciosamente retorna 0.
+//
+// Sem TTL de staleness — o próprio server do tunnel (DTProto/HCP) é
+// responsável por remover entries do stats.json quando o usuário desconecta.
+// Aplicar TTL aqui causava falso "00/01" porque last_seen_at é atualizado
+// em intervalos de keep-alive (que podem ser mais longos que o TTL).
 const (
 	dtprotoStatsPath = "/var/lib/proto-server/stats.json"
 	hcpStatsPath     = "/var/lib/hcp/stats.json"
-	// Sessões com last_seen_at mais antigo que isso são consideradas zumbis.
-	statsStaleAfter = 60 * time.Second
 )
 
 // buildCountChain monta a cadeia: SSH → OpenVPN → DTProto → HCP.
@@ -33,10 +34,10 @@ func buildCountChain(executor contract.Executor) contract.CountConnection {
 	)
 	countSSH.SetNext(countOvpn)
 
-	countDtProto := connection.NewStatsFileConnection(dtprotoStatsPath, statsStaleAfter)
+	countDtProto := connection.NewStatsFileConnection(dtprotoStatsPath, 0)
 	countOvpn.SetNext(countDtProto)
 
-	countHcp := connection.NewStatsFileConnection(hcpStatsPath, statsStaleAfter)
+	countHcp := connection.NewStatsFileConnection(hcpStatsPath, 0)
 	countDtProto.SetNext(countHcp)
 
 	return countSSH
