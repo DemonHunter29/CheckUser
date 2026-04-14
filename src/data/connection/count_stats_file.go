@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"time"
 
@@ -75,6 +76,7 @@ func (s *statsFileConnection) All(ctx context.Context) (int, error) {
 func (s *statsFileConnection) countInFile(username string) int {
 	entries, ok := s.readFile()
 	if !ok {
+		log.Printf("[stats] %s: file missing/unreadable", s.path)
 		return 0
 	}
 	n := 0
@@ -83,6 +85,8 @@ func (s *statsFileConnection) countInFile(username string) int {
 			n++
 		}
 	}
+	log.Printf("[stats] %s: matched %d entries for user=%q (total entries=%d)",
+		s.path, n, username, len(entries))
 	return n
 }
 
