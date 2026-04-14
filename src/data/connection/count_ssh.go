@@ -2,7 +2,6 @@ package connection
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 
 	"github.com/DemonHunter29/CheckUser/src/domain/contract"
@@ -23,10 +22,10 @@ func (ssh *sshConnection) SetNext(connection contract.CountConnection) {
 
 func (s *sshConnection) ByUsername(ctx context.Context, username string) (int, error) {
 	cmd := "ps -u " + username
-	result, err := s.executor.Execute(ctx, cmd)
-	if err != nil {
-		return 0, err
-	}
+	result, _ := s.executor.Execute(ctx, cmd)
+	// NÃO propaga erro de `ps`: exit 1 é normal quando o usuário não tem
+	// processos (nenhum sshd spawned). Antes esse erro abortava o chain
+	// inteiro e impedia os counters DTProto/HCP de serem chamados.
 
 	sshdPattern := regexp.MustCompile(`.*sshd`)
 	matches := sshdPattern.FindAllStringSubmatch(result, -1)
@@ -38,15 +37,14 @@ func (s *sshConnection) ByUsername(ctx context.Context, username string) (int, e
 		}
 	}
 
-	return totalConnections, err
+	return totalConnections, nil
 }
 
 func (s *sshConnection) All(ctx context.Context) (int, error) {
 	cmd := "ps -ef"
-	result, err := s.executor.Execute(ctx, cmd)
-	if err != nil {
-		return 0, fmt.Errorf("failed to execute command: %w", err)
-	}
+	result, _ := s.executor.Execute(ctx, cmd)
+	// Tolera erro — se o ps falhar, segue com totalConnections=0 do SSH e
+	// delega pro próximo counter (DTProto/HCP).
 
 	sshdPattern := regexp.MustCompile(`(?m)^(\S+)\s+\d+\s+\d+\s+\d+\s+\d+:\d+\s+.*\bsshd\b.*$`)
 	processMatches := sshdPattern.FindAllStringSubmatch(string(result), -1)
