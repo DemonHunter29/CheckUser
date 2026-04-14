@@ -42,8 +42,20 @@ download_binary() {
     local url="https://github.com/${REPO}/releases/download/${tag}/${name}"
 
     echo -e "⬇️  Baixando \e[1;36m${name}\e[0m (${tag})..."
-    if ! curl -fsSL "$url" -o "$BINARY_PATH"; then
+    # -L segue redirects (releases do GH redirecionam pra objects.githubusercontent.com).
+    # -A força UA de browser — alguns CDNs do GH bloqueiam UA padrão de curl.
+    # --retry 5 cobre transient 404 do CDN logo após uma release ser publicada.
+    if ! curl -L -A "Mozilla/5.0" --retry 5 --retry-delay 2 --retry-all-errors \
+            -o "$BINARY_PATH" "$url"; then
         echo -e "\e[1;31mFalha no download de ${url}\e[0m"
+        return 1
+    fi
+    # Sanidade — se o GH devolveu HTML de erro, o arquivo terá <100KB.
+    local size
+    size=$(stat -c%s "$BINARY_PATH" 2>/dev/null || echo 0)
+    if [ "$size" -lt 100000 ]; then
+        echo -e "\e[1;31mDownload corrompido ($size bytes). Tente novamente em 30s.\e[0m"
+        rm -f "$BINARY_PATH"
         return 1
     fi
     chmod +x "$BINARY_PATH"
