@@ -41,28 +41,23 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 		return nil, err
 	}
 
-	existingDevices, err := c.deviceRepository.CountByUsername(ctx, username)
-	if err != nil {
-		return nil, err
-	}
-
 	device := &entity.Device{
 		ID:       deviceID,
 		Username: username,
 	}
 
+	// Sessões ativas (SSH + DTProto + HCP).
+	connections, _ := c.countConnection.ByUsername(ctx, username)
+
 	deviceExists := c.deviceRepository.Exists(ctx, device)
-	limitReached := !deviceExists && user.LimitReached(existingDevices)
+	limitReached := !deviceExists && user.LimitReached(connections)
 
 	if !deviceExists && !limitReached {
 		if err := c.deviceRepository.Save(ctx, device); err != nil {
 			return nil, err
 		}
-		existingDevices++
 	}
 
-	// Sessões ativas (SSH + DTProto + HCP).
-	connections, _ := c.countConnection.ByUsername(ctx, username)
 	if limitReached {
 		connections = user.Limit + 1
 	}
