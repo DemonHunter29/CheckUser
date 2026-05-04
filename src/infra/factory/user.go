@@ -49,7 +49,8 @@ func MakeCheckUserHandler() handler.Handler {
 	userDAO := dao.NewUserDAO(executor)
 	userRepository := repository.NewSystemUserRepository(userDAO)
 	deviceRepository := repository.NewSQLiteDeviceRepository()
-	checkUserUseCase := user_use_case.NewCheckUserUseCase(userRepository, deviceRepository)
+	count := buildCountChain(executor)
+	checkUserUseCase := user_use_case.NewCheckUserUseCase(userRepository, deviceRepository, count)
 	return user_handler.NewCheckUserHandler(checkUserUseCase)
 }
 
