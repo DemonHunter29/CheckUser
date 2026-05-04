@@ -61,12 +61,8 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 		existingDevices++
 	}
 
-	// Usa sessões ativas (SSH + DTProto + HCP) como count_connections.
-	// Fallback pro count de devices se o counter falhar ou retornar 0.
-	connections, err := c.countConnection.ByUsername(ctx, username)
-	if err != nil || connections == 0 {
-		connections = existingDevices
-	}
+	// Sessões ativas (SSH + DTProto + HCP).
+	connections, _ := c.countConnection.ByUsername(ctx, username)
 	if limitReached {
 		connections = user.Limit + 1
 	}
