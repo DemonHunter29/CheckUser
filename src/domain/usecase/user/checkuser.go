@@ -20,15 +20,18 @@ type CheckUserOutput struct {
 type CheckUserUseCase struct {
 	userRepository   contract.UserRepository
 	deviceRepository contract.DeviceRepository
+	countConnection  contract.CountConnection
 }
 
 func NewCheckUserUseCase(
 	userRepository contract.UserRepository,
 	deviceRepository contract.DeviceRepository,
+	countConnection contract.CountConnection,
 ) *CheckUserUseCase {
 	return &CheckUserUseCase{
 		userRepository:   userRepository,
 		deviceRepository: deviceRepository,
+		countConnection:  countConnection,
 	}
 }
 
@@ -58,7 +61,12 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 		existingDevices++
 	}
 
-	connections := existingDevices
+	// Usa sessões ativas (SSH + DTProto + HCP) como count_connections.
+	// Fallback pro count de devices se o counter falhar ou retornar 0.
+	connections, err := c.countConnection.ByUsername(ctx, username)
+	if err != nil || connections == 0 {
+		connections = existingDevices
+	}
 	if limitReached {
 		connections = user.Limit + 1
 	}
