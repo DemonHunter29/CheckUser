@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/DemonHunter29/CheckUser/src/data/dao"
 	user_use_case "github.com/DemonHunter29/CheckUser/src/domain/usecase/user"
 	"github.com/DemonHunter29/CheckUser/src/infra/handler"
 )
@@ -21,6 +22,13 @@ func (h *checkUserHandler) Handle(ctx context.Context, request *handler.HttpRequ
 	deviceID := request.Query("deviceId")
 	if username == "" || deviceID == "" {
 		return nil, errors.New("Please provide a username and device ID")
+	}
+
+	// Se o identificador for um UUID Xray, resolve para o username Linux
+	// via config.json do Xray (clients[].email). Permite que SSH e Xray
+	// compartilhem o mesmo deviceId tracking pelo mesmo username.
+	if resolved, ok := dao.ResolveUUID(username); ok {
+		username = resolved
 	}
 
 	output, err := h.checkUserUseCase.Execute(ctx, username, deviceID)
