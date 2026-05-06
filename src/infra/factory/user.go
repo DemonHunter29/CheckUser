@@ -22,9 +22,9 @@ import (
 // Aplicar TTL aqui causava falso "00/01" porque last_seen_at é atualizado
 // em intervalos de keep-alive (que podem ser mais longos que o TTL).
 const (
-	dtprotoStatsPath = "/var/lib/proto-server/stats.json"
-	hcpStatsPath     = "/var/lib/hcp-server/stats.json"
-	xrayAPIAddr      = "127.0.0.1:1085"
+	dtprotoStatsPath    = "/var/lib/proto-server/stats.json"
+	hcpStatsPath        = "/var/lib/hcp-server/stats.json"
+	xrayAPIAddrFallback = "127.0.0.1:1085"
 )
 
 // buildCountChain monta a cadeia: SSH → DTProto → HCP → Xray.
@@ -33,8 +33,8 @@ const (
 // OpenVPN foi retirado: o net.Dial pra 127.0.0.1:7505 não tem timeout e
 // pode travar a chain inteira quando o port não responde (firewall DROP).
 //
-// Xray: consulta a API gRPC do Xray via polling de 30s. Se o Xray não
-// estiver instalado, retorna 0 silenciosamente.
+// Xray: porta lida do config.json (seção api.tag → inbound com essa tag).
+// Fallback para 127.0.0.1:1085 se o config não for encontrado.
 func buildCountChain(executor contract.Executor) contract.CountConnection {
 	countSSH := connection.NewSSHConnection(executor)
 
@@ -44,11 +44,18 @@ func buildCountChain(executor contract.Executor) contract.CountConnection {
 	countHcp := connection.NewStatsFileConnection(hcpStatsPath, 0)
 	countDtProto.SetNext(countHcp)
 
-	countXray := connection.NewXrayConnection(xrayAPIAddr)
+	xrayAddr := dao.ResolveXrayAPIAddr()
+	if xrayAddr == "" {
+		xrayAddr = xrayAPIAddrFallback
+		log.Printf("[xray] config.json não encontrado — usando fallback %s", xrayAddr)
+	} else {
+		log.Printf("[xray] porta detectada via config.json: %s", xrayAddr)
+	}
+	countXray := connection.NewXrayConnection(xrayAddr)
 	countHcp.SetNext(countXray)
 
 	log.Printf("[chain] SSH → DTProto(%s) → HCP(%s) → Xray(%s)",
-		dtprotoStatsPath, hcpStatsPath, xrayAPIAddr)
+		dtprotoStatsPath, hcpStatsPath, xrayAddr)
 	return countSSH
 }
 
