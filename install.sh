@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# CheckUser — installer & manager
+# HorizonVPN — CheckUser installer & manager
 # Uso: bash <(curl -sL https://raw.githubusercontent.com/DemonHunter29/CheckUser/master/install.sh)
 
 REPO="DemonHunter29/CheckUser"
@@ -102,7 +102,7 @@ write_service() {
     local port=$1
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=CheckUser Service
+Description=HorizonVPN CheckUser Service
 After=network.target nss-lookup.target
 
 [Service]
@@ -156,7 +156,7 @@ install_menu_script() {
 # ── Instalação ────────────────────────────────────────────────────────────────
 install_service() {
     clear; sep
-    printf "   ${C}%-44s${N}\n" "INSTALANDO CHECKUSER"
+    printf "   ${C}%-44s${N}\n" "HorizonVPN — INSTALANDO CHECKUSER"
     sep; echo
 
     # Migração: remover binário antigo em /usr/local/bin/checkuser se existir
@@ -194,7 +194,7 @@ install_service() {
 
 reinstall_service() {
     clear; sep
-    printf "   ${Y}%-44s${N}\n" "REINSTALANDO CHECKUSER"
+    printf "   ${Y}%-44s${N}\n" "HorizonVPN — REINSTALANDO CHECKUSER"
     sep; echo
 
     info "Parando serviço..."
@@ -295,9 +295,9 @@ main() {
 
         sep
         if [[ -n "$ver" ]]; then
-            printf "   ${C}CHECKUSER ${W}v%-36s${N}\n" "$ver"
+            printf "   ${C}HorizonVPN ${W}CheckUser v%-33s${N}\n" "$ver"
         else
-            printf "   ${C}CHECKUSER ${R}%-36s${N}\n" "[NÃO INSTALADO]"
+            printf "   ${C}HorizonVPN ${W}CheckUser ${R}%-23s${N}\n" "[NÃO INSTALADO]"
         fi
         sep
 
