@@ -5,8 +5,9 @@
 
 REPO="DemonHunter29/CheckUser"
 SERVICE_NAME="checkuser"
-BINARY_PATH="/usr/local/bin/checkuser"
-MENU_PATH="/usr/local/bin/checkuser-menu"
+BINARY_PATH="/usr/local/bin/checkuser-core"   # binário Go
+WRAPPER_PATH="/usr/local/bin/checkuser"        # wrapper: sem args → menu; com args → core
+MENU_PATH="/usr/local/bin/checkuser-menu"      # script de menu (cópia deste arquivo)
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 DEFAULT_PORT="2052"
 
@@ -118,6 +119,27 @@ WantedBy=multi-user.target
 EOF
 }
 
+# ── Wrapper /usr/local/bin/checkuser ─────────────────────────────────────────
+# Sem argumentos → abre o menu. Com argumentos → repassa ao binário core.
+install_wrapper() {
+    cat > "$WRAPPER_PATH" <<'WRAPPER'
+#!/bin/bash
+CORE="/usr/local/bin/checkuser-core"
+MENU="/usr/local/bin/checkuser-menu"
+
+if [[ $# -eq 0 ]]; then
+    [[ $EUID -ne 0 ]] && exec sudo "$0"
+    [[ -x "$MENU" ]] && exec "$MENU"
+    echo "checkuser-menu não encontrado. Reinstale com:"
+    echo "  bash <(curl -sL https://raw.githubusercontent.com/DemonHunter29/CheckUser/master/install.sh)"
+    exit 1
+fi
+exec "$CORE" "$@"
+WRAPPER
+    chmod +x "$WRAPPER_PATH"
+    ok "Wrapper instalado: ${C}checkuser${N} (sem args → menu | com args → core)"
+}
+
 # ── Instalar menu script ──────────────────────────────────────────────────────
 install_menu_script() {
     local src="${BASH_SOURCE[0]:-}"
@@ -128,7 +150,7 @@ install_menu_script() {
             -o "$MENU_PATH" &>/dev/null || true
     fi
     chmod +x "$MENU_PATH" 2>/dev/null
-    [[ -x "$MENU_PATH" ]] && ok "Atalho instalado: ${C}checkuser-menu${N}"
+    [[ -x "$MENU_PATH" ]] && ok "Menu instalado: ${C}checkuser-menu${N}"
 }
 
 # ── Instalação ────────────────────────────────────────────────────────────────
@@ -136,6 +158,13 @@ install_service() {
     clear; sep
     printf "   ${C}%-44s${N}\n" "INSTALANDO CHECKUSER"
     sep; echo
+
+    # Migração: remover binário antigo em /usr/local/bin/checkuser se existir
+    # (antes o binário ficava lá; agora é o wrapper)
+    if [[ -x "$WRAPPER_PATH" ]] && file "$WRAPPER_PATH" 2>/dev/null | grep -q "ELF"; then
+        info "Migrando binário antigo para checkuser-core..."
+        mv "$WRAPPER_PATH" "$BINARY_PATH"
+    fi
 
     download_binary || return 1
 
@@ -152,6 +181,7 @@ install_service() {
     sleep 1
 
     open_port "$port"
+    install_wrapper
     install_menu_script
 
     local ip; ip=$(get_ip)
@@ -184,7 +214,7 @@ uninstall_service() {
 
     systemctl stop "$SERVICE_NAME" &>/dev/null
     systemctl disable "$SERVICE_NAME" &>/dev/null
-    rm -f "$BINARY_PATH" "$SERVICE_FILE" "$MENU_PATH"
+    rm -f "$BINARY_PATH" "$WRAPPER_PATH" "$SERVICE_FILE" "$MENU_PATH"
     systemctl daemon-reload &>/dev/null
     echo; ok "CheckUser removido com sucesso."
     press_enter
@@ -215,8 +245,7 @@ menu_devices() {
 
         case $opt in
             1)
-                clear
-                line
+                clear; line
                 printf "  ${C}%-44s${N}\n" "TODOS OS DISPOSITIVOS"
                 line; echo
                 "$BINARY_PATH" -list-all-devices 2>&1
