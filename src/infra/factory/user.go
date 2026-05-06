@@ -24,13 +24,17 @@ import (
 const (
 	dtprotoStatsPath = "/var/lib/proto-server/stats.json"
 	hcpStatsPath     = "/var/lib/hcp-server/stats.json"
+	xrayAPIAddr      = "127.0.0.1:1085"
 )
 
-// buildCountChain monta a cadeia: SSH → DTProto → HCP.
+// buildCountChain monta a cadeia: SSH → DTProto → HCP → Xray.
 // Cada handler soma sua contagem antes de delegar ao próximo.
 //
 // OpenVPN foi retirado: o net.Dial pra 127.0.0.1:7505 não tem timeout e
 // pode travar a chain inteira quando o port não responde (firewall DROP).
+//
+// Xray: consulta a API gRPC do Xray via polling de 30s. Se o Xray não
+// estiver instalado, retorna 0 silenciosamente.
 func buildCountChain(executor contract.Executor) contract.CountConnection {
 	countSSH := connection.NewSSHConnection(executor)
 
@@ -40,7 +44,11 @@ func buildCountChain(executor contract.Executor) contract.CountConnection {
 	countHcp := connection.NewStatsFileConnection(hcpStatsPath, 0)
 	countDtProto.SetNext(countHcp)
 
-	log.Printf("[chain] SSH → DTProto(%s) → HCP(%s)", dtprotoStatsPath, hcpStatsPath)
+	countXray := connection.NewXrayConnection(xrayAPIAddr)
+	countHcp.SetNext(countXray)
+
+	log.Printf("[chain] SSH → DTProto(%s) → HCP(%s) → Xray(%s)",
+		dtprotoStatsPath, hcpStatsPath, xrayAPIAddr)
 	return countSSH
 }
 
