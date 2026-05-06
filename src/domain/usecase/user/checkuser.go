@@ -64,10 +64,16 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 	if limitReached {
 		// Novo device bloqueado: exibe acima do limite para disparar o aviso no app
 		connections = user.Limit + 1
-	} else if deviceExists && connections > user.Limit {
-		// Device já registrado com sessões duplicadas/fantasmas: capa no limite
-		// para não disparar "Limite atingido" indevidamente no app
-		connections = user.Limit
+	} else if deviceExists {
+		// Device registrado: garante mínimo 1 (cobre Xray e outros protocolos
+		// fora da cadeia SSH/DTProto/HCP que retornam 0 sessões ativas)
+		if connections < registeredDevices {
+			connections = registeredDevices
+		}
+		// Capa no limite para não disparar falso "Limite atingido" por sessões fantasmas
+		if connections > user.Limit {
+			connections = user.Limit
+		}
 	}
 
 	return &CheckUserOutput{
