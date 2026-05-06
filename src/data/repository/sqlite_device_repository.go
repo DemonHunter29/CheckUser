@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -139,8 +140,9 @@ func DeleteDB() {
 		log.Fatal(err)
 	}
 
-	_, err = db.Exec(`DROP TABLE IF EXISTS devices`)
+	_, err = db.Exec(`DELETE FROM devices`)
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println("Todos os devices foram removidos.")
 }
