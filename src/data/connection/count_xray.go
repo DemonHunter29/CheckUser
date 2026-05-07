@@ -9,32 +9,23 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strings"
-	"sync"
-	"time"
 
 	"golang.org/x/net/http2"
 
 	"github.com/DemonHunter29/CheckUser/src/domain/contract"
 )
 
-const xrayStatsPath = "/xray.app.stats.command.StatsService/QueryStats"
+const (
+	// GetStatsOnline retorna o número exato de conexões ativas de um usuário.
+	xrayOnlinePath = "/xray.app.stats.command.StatsService/GetStatsOnline"
+	// GetAllOnlineUsers retorna lista de usuários com pelo menos 1 conexão ativa.
+	xrayAllOnlinePath = "/xray.app.stats.command.StatsService/GetAllOnlineUsers"
+)
 
-// xrayConnection conta conexões Xray via API gRPC (HTTP/2 cleartext) do Xray.
-// Faz polling a cada 30s comparando snapshots de stats — não usa reset=true
-// para não interferir com painéis externos.
-//
-// Um usuário é considerado ativo se seus bytes acumulados aumentaram desde o
-// último poll (janela de 90s = 3 intervalos de poll).
 type xrayConnection struct {
 	addr      string
 	transport *http2.Transport
 	next      contract.CountConnection
-
-	mu     sync.RWMutex
-	online map[string]time.Time // username → última atividade detectada
-	prev   map[string]int64     // username → total de bytes no último poll
-	once   sync.Once
 }
 
 func NewXrayConnection(addr string) contract.CountConnection {
@@ -47,8 +38,6 @@ func NewXrayConnection(addr string) contract.CountConnection {
 				return d.DialContext(ctx, network, addr)
 			},
 		},
-		online: make(map[string]time.Time),
-		prev:   make(map[string]int64),
 	}
 }
 
@@ -57,14 +46,13 @@ func (x *xrayConnection) SetNext(next contract.CountConnection) {
 }
 
 func (x *xrayConnection) ByUsername(ctx context.Context, username string) (int, error) {
-	x.once.Do(func() { go x.pollLoop() })
-	// Se o usuário não está no cache, faz um poll imediato antes de verificar.
-	// Resolve o caso de checkuser chamado logo após a conexão, antes do poll
-	// periódico de 30s detectar a atividade do usuário.
-	if x.isActive(username) == 0 {
-		x.poll()
+	count, err := x.queryOnlineCount(ctx, username)
+	if err != nil {
+		log.Printf("[xray] online %s user=%s: %v", x.addr, username, err)
+		count = 0
+	} else {
+		log.Printf("[xray] online %s user=%s: %d conexão(ões)", x.addr, username, count)
 	}
-	count := x.isActive(username)
 	if x.next != nil {
 		if n, err := x.next.ByUsername(ctx, username); err == nil {
 			count += n
@@ -74,16 +62,13 @@ func (x *xrayConnection) ByUsername(ctx context.Context, username string) (int, 
 }
 
 func (x *xrayConnection) All(ctx context.Context) (int, error) {
-	x.once.Do(func() { go x.pollLoop() })
-	x.mu.RLock()
+	users, err := x.queryAllOnlineUsers(ctx)
 	count := 0
-	deadline := time.Now().Add(-90 * time.Second)
-	for _, t := range x.online {
-		if t.After(deadline) {
-			count++
-		}
+	if err != nil {
+		log.Printf("[xray] all online %s: %v", x.addr, err)
+	} else {
+		count = len(users)
 	}
-	x.mu.RUnlock()
 	if x.next != nil {
 		if n, err := x.next.All(ctx); err == nil {
 			count += n
@@ -92,102 +77,64 @@ func (x *xrayConnection) All(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func (x *xrayConnection) isActive(username string) int {
-	x.mu.RLock()
-	defer x.mu.RUnlock()
-	if t, ok := x.online[username]; ok && time.Since(t) < 90*time.Second {
-		return 1
-	}
-	return 0
-}
-
 func (x *xrayConnection) Kill(ctx context.Context, username string) {
-	x.mu.Lock()
-	delete(x.online, username)
-	delete(x.prev, username)
-	x.mu.Unlock()
-	log.Printf("[xray] kill: cache de %s removido", username)
+	// Xray não tem API de kill direto; a sessão encerra quando a conexão TCP fecha.
 	if x.next != nil {
 		x.next.Kill(ctx, username)
 	}
 }
 
-func (x *xrayConnection) pollLoop() {
-	x.poll()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		x.poll()
-	}
-}
+// queryOnlineCount chama GetStatsOnline e retorna o número exato de conexões ativas.
+func (x *xrayConnection) queryOnlineCount(ctx context.Context, username string) (int, error) {
+	name := "user>>>" + username + ">>>online"
+	body := xrayEncodeRequest(name, false)
 
-func (x *xrayConnection) poll() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	stats, err := x.callQueryStats(ctx, "user>>>", false)
-	if err != nil {
-		log.Printf("[xray] poll %s: %v", x.addr, err)
-		return
-	}
-
-	// Soma todos os bytes por username (pode haver múltiplos inbounds)
-	current := make(map[string]int64, len(stats))
-	for _, s := range stats {
-		u := xrayExtractUsername(s.name)
-		if u != "" {
-			current[u] += s.value
-		}
-	}
-
-	now := time.Now()
-	x.mu.Lock()
-	for u, val := range current {
-		if val > x.prev[u] {
-			x.online[u] = now
-		}
-		x.prev[u] = val
-	}
-	x.mu.Unlock()
-
-	log.Printf("[xray] poll %s: %d usuários com stats", x.addr, len(current))
-}
-
-// xrayExtractUsername extrai o username de "user>>>email>>>traffic>>>..."
-// Suporta email com @ (user>>>nome@tag>>>...) e sem @ (user>>>nome>>>...).
-func xrayExtractUsername(name string) string {
-	after, found := strings.CutPrefix(name, "user>>>")
-	if !found {
-		return ""
-	}
-	// Prefere o delimitador '@' (formato email@tag)
-	if idx := strings.IndexByte(after, '@'); idx > 0 {
-		return after[:idx]
-	}
-	// Fallback: sem '@', usa tudo até '>>>'
-	if idx := strings.Index(after, ">>>"); idx > 0 {
-		return after[:idx]
-	}
-	return ""
-}
-
-// ── gRPC / Protobuf ──────────────────────────────────────────────────────────
-
-type xrayStat struct {
-	name  string
-	value int64
-}
-
-func (x *xrayConnection) callQueryStats(ctx context.Context, pattern string, reset bool) ([]xrayStat, error) {
-	body := xrayEncodeRequest(pattern, reset)
-
-	// gRPC frame: [compressed(1)] [length(4 BE)] [body]
 	frame := make([]byte, 5+len(body))
 	binary.BigEndian.PutUint32(frame[1:5], uint32(len(body)))
 	copy(frame[5:], body)
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
-		"http://"+x.addr+xrayStatsPath, bytes.NewReader(frame))
+		"http://"+x.addr+xrayOnlinePath, bytes.NewReader(frame))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/grpc")
+	req.Header.Set("TE", "trailers")
+
+	resp, err := (&http.Client{Transport: x.transport}).Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	if len(raw) < 5 {
+		return 0, nil
+	}
+
+	msgLen := int(binary.BigEndian.Uint32(raw[1:5]))
+	end := 5 + msgLen
+	if end > len(raw) {
+		end = len(raw)
+	}
+
+	// GetStatsResponse tem Stat stat = 1 (mesmo wire format que QueryStats).
+	stats := xrayDecodeResponse(raw[5:end])
+	if len(stats) == 0 {
+		return 0, nil
+	}
+	return int(stats[0].value), nil
+}
+
+// queryAllOnlineUsers chama GetAllOnlineUsers e retorna a lista de nomes online.
+func (x *xrayConnection) queryAllOnlineUsers(ctx context.Context) ([]string, error) {
+	frame := make([]byte, 5) // request vazio — GetAllOnlineUsersRequest sem campos
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		"http://"+x.addr+xrayAllOnlinePath, bytes.NewReader(frame))
 	if err != nil {
 		return nil, err
 	}
@@ -213,22 +160,55 @@ func (x *xrayConnection) callQueryStats(ctx context.Context, pattern string, res
 	if end > len(raw) {
 		end = len(raw)
 	}
-	return xrayDecodeResponse(raw[5:end]), nil
+
+	return xrayDecodeAllOnline(raw[5:end]), nil
 }
 
-// xrayEncodeRequest serializa QueryStatsRequest{pattern, reset} em protobuf.
-func xrayEncodeRequest(pattern string, reset bool) []byte {
+// xrayDecodeAllOnline desserializa GetAllOnlineUsersResponse { repeated string users = 1 }.
+func xrayDecodeAllOnline(data []byte) []string {
+	var out []string
+	for i := 0; i < len(data); {
+		tag, n := pbReadVarint(data[i:])
+		if n <= 0 {
+			break
+		}
+		i += n
+		fieldNum, wireType := tag>>3, tag&0x7
+		if fieldNum == 1 && wireType == 2 {
+			l, n := pbReadVarint(data[i:])
+			if n <= 0 || i+n+int(l) > len(data) {
+				break
+			}
+			i += n
+			out = append(out, string(data[i:i+int(l)]))
+			i += int(l)
+		} else {
+			i = pbSkip(data, i, wireType)
+		}
+	}
+	return out
+}
+
+// ── gRPC / Protobuf ──────────────────────────────────────────────────────────
+
+type xrayStat struct {
+	name  string
+	value int64
+}
+
+// xrayEncodeRequest serializa GetStatsRequest{name} em protobuf.
+func xrayEncodeRequest(name string, reset bool) []byte {
 	var b []byte
 	b = append(b, 0x0A) // field 1, wire 2 (string)
-	b = pbVarint(b, uint64(len(pattern)))
-	b = append(b, pattern...)
+	b = pbVarint(b, uint64(len(name)))
+	b = append(b, name...)
 	if reset {
 		b = append(b, 0x10, 0x01) // field 2, wire 0 (bool=true)
 	}
 	return b
 }
 
-// xrayDecodeResponse desserializa QueryStatsResponse → []xrayStat.
+// xrayDecodeResponse desserializa GetStatsResponse/QueryStatsResponse → []xrayStat.
 func xrayDecodeResponse(data []byte) []xrayStat {
 	var out []xrayStat
 	for i := 0; i < len(data); {
@@ -289,7 +269,6 @@ func xrayDecodeStat(data []byte) xrayStat {
 	return s
 }
 
-// pbSkip avança i além do valor do campo com o wireType dado.
 func pbSkip(data []byte, i int, wireType uint64) int {
 	switch wireType {
 	case 0:
