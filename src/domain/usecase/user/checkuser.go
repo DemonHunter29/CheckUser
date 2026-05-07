@@ -58,8 +58,10 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 	// Device cadastrado sempre passa — é o "aparelho do dono".
 	limitReached := user.Limit > 0 && connections > user.Limit && !deviceExists
 
-	// Registra novo device apenas quando não está bloqueado
-	if !deviceExists && !limitReached {
+	// Registra apenas o PRIMEIRO device do usuário (quando nenhum ainda está salvo).
+	// Conexões subsequentes com outros device IDs não sobrescrevem o device do dono.
+	deviceCount, _ := c.deviceRepository.CountByUsername(ctx, username)
+	if !deviceExists && !limitReached && deviceCount == 0 {
 		if err := c.deviceRepository.Save(ctx, device); err != nil {
 			return nil, err
 		}
