@@ -46,34 +46,25 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 		Username: username,
 	}
 
-	// Devices registrados → usado para verificar o limite (quantos dispositivos distintos)
-	registeredDevices, _ := c.deviceRepository.CountByUsername(ctx, username)
+	// Sessões ativas (SSH + DTProto + HCP + Xray) → base do bloqueio
+	connections, _ := c.countConnection.ByUsername(ctx, username)
 
 	deviceExists := c.deviceRepository.Exists(ctx, device)
-	limitReached := !deviceExists && user.LimitReached(registeredDevices)
 
+	// Bloqueia apenas se: conexões ativas atingiram o limite E o device não
+	// está cadastrado. Device cadastrado sempre passa — é o "aparelho do dono".
+	limitReached := user.Limit > 0 && connections >= user.Limit && !deviceExists
+
+	// Registra novo device apenas quando não está bloqueado
 	if !deviceExists && !limitReached {
 		if err := c.deviceRepository.Save(ctx, device); err != nil {
 			return nil, err
 		}
 	}
 
-	// Sessões ativas (SSH + DTProto + HCP) → exibido no app
-	connections, _ := c.countConnection.ByUsername(ctx, username)
-
 	if limitReached {
-		// Novo device bloqueado: exibe acima do limite para disparar o aviso no app
+		// Sinaliza acima do limite para disparar o aviso no app
 		connections = user.Limit + 1
-	} else if deviceExists {
-		// Device registrado: garante mínimo 1 (cobre Xray e outros protocolos
-		// fora da cadeia SSH/DTProto/HCP que retornam 0 sessões ativas)
-		if connections < registeredDevices {
-			connections = registeredDevices
-		}
-		// Capa no limite para não disparar falso "Limite atingido" por sessões fantasmas
-		if connections > user.Limit {
-			connections = user.Limit
-		}
 	}
 
 	return &CheckUserOutput{
