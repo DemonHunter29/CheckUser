@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"log"
 	"regexp"
 
 	"github.com/DemonHunter29/CheckUser/src/domain/contract"
@@ -30,6 +31,7 @@ func (s *sshConnection) ByUsername(ctx context.Context, username string) (int, e
 	sshdPattern := regexp.MustCompile(`.*sshd`)
 	matches := sshdPattern.FindAllStringSubmatch(result, -1)
 	totalConnections := len(matches)
+	log.Printf("[ssh] ps -u %s: %d sshd process(es)", username, totalConnections)
 	if s.next != nil {
 		count, err := s.next.ByUsername(ctx, username)
 		if err == nil {
