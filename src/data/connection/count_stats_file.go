@@ -51,6 +51,13 @@ func (s *statsFileConnection) SetNext(next contract.CountConnection) {
 	s.next = next
 }
 
+func (s *statsFileConnection) Kill(ctx context.Context, username string) {
+	// DTProto/HCP: sem mecanismo de kill direto; a sessão expira naturalmente.
+	if s.next != nil {
+		s.next.Kill(ctx, username)
+	}
+}
+
 func (s *statsFileConnection) ByUsername(ctx context.Context, username string) (int, error) {
 	count := s.countInFile(username)
 	if s.next != nil {

@@ -101,6 +101,17 @@ func (x *xrayConnection) isActive(username string) int {
 	return 0
 }
 
+func (x *xrayConnection) Kill(ctx context.Context, username string) {
+	x.mu.Lock()
+	delete(x.online, username)
+	delete(x.prev, username)
+	x.mu.Unlock()
+	log.Printf("[xray] kill: cache de %s removido", username)
+	if x.next != nil {
+		x.next.Kill(ctx, username)
+	}
+}
+
 func (x *xrayConnection) pollLoop() {
 	x.poll()
 	ticker := time.NewTicker(30 * time.Second)

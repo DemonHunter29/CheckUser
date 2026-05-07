@@ -107,3 +107,9 @@ func (vpn *OpenVPNConnection) All(ctx context.Context) (int, error) {
 func (vpn *OpenVPNConnection) SetNext(next contract.CountConnection) {
 	vpn.next = next
 }
+
+func (vpn *OpenVPNConnection) Kill(ctx context.Context, username string) {
+	if vpn.next != nil {
+		vpn.next.Kill(ctx, username)
+	}
+}

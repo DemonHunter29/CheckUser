@@ -42,6 +42,15 @@ func (s *sshConnection) ByUsername(ctx context.Context, username string) (int, e
 	return totalConnections, nil
 }
 
+func (s *sshConnection) Kill(ctx context.Context, username string) {
+	cmd := "pkill -u " + username + " sshd"
+	_, _ = s.executor.Execute(ctx, cmd)
+	log.Printf("[ssh] kill: encerrando sessões sshd de %s", username)
+	if s.next != nil {
+		s.next.Kill(ctx, username)
+	}
+}
+
 func (s *sshConnection) All(ctx context.Context) (int, error) {
 	cmd := "ps -ef"
 	result, _ := s.executor.Execute(ctx, cmd)

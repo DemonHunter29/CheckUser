@@ -54,9 +54,7 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 
 	deviceExists := c.deviceRepository.Exists(ctx, device)
 
-	// Bloqueia quando ACIMA do limite, independente de device registrado.
-	// O limite se aplica ao total de sessões simultâneas em todos os protocolos.
-	limitReached := user.Limit > 0 && connections > user.Limit
+	limitReached := user.Limit > 0 && connections > user.Limit && !deviceExists
 
 	// Registra apenas o PRIMEIRO device do usuário (quando nenhum ainda está salvo).
 	// Conexões subsequentes com outros device IDs não sobrescrevem o device do dono.
@@ -68,7 +66,12 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 	}
 
 	if limitReached {
-		// Sinaliza acima do limite para disparar o aviso no app
+		// Device não registrado acima do limite: sinaliza bloqueio no app.
+		connections = user.Limit + 1
+	} else if deviceExists && connections > user.Limit {
+		// Device registrado acima do limite: expulsa sessões dos outros protocolos
+		// e exibe 02/01 para indicar que havia conflito.
+		c.countConnection.Kill(ctx, username)
 		connections = user.Limit + 1
 	}
 
