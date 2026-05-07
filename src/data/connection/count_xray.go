@@ -58,6 +58,12 @@ func (x *xrayConnection) SetNext(next contract.CountConnection) {
 
 func (x *xrayConnection) ByUsername(ctx context.Context, username string) (int, error) {
 	x.once.Do(func() { go x.pollLoop() })
+	// Se o usuário não está no cache, faz um poll imediato antes de verificar.
+	// Resolve o caso de checkuser chamado logo após a conexão, antes do poll
+	// periódico de 30s detectar a atividade do usuário.
+	if x.isActive(username) == 0 {
+		x.poll()
+	}
 	count := x.isActive(username)
 	if x.next != nil {
 		if n, err := x.next.ByUsername(ctx, username); err == nil {
