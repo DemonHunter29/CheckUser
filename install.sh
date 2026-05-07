@@ -85,6 +85,58 @@ get_ip() {
         || hostname -I 2>/dev/null | awk '{print $1}'
 }
 
+# ── Xray: garantir statsUserOnline ───────────────────────────────────────────
+fix_xray_stats_online() {
+    local xray_configs=(
+        "/usr/local/etc/xray/config.json"
+        "/etc/xray/config.json"
+        "/opt/xray/config.json"
+    )
+
+    local config_path=""
+    for p in "${xray_configs[@]}"; do
+        [[ -f "$p" ]] && { config_path="$p"; break; }
+    done
+
+    [[ -z "$config_path" ]] && return 0  # Xray não instalado
+
+    info "Verificando statsUserOnline no Xray (${config_path})..."
+
+    local result
+    result=$(python3 - "$config_path" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+    level0 = cfg.setdefault("policy", {}).setdefault("levels", {}).setdefault("0", {})
+    if level0.get("statsUserOnline") is True:
+        print("ok")
+        sys.exit(0)
+    level0["statsUserOnline"] = True
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    print("changed")
+except Exception as e:
+    print("error:" + str(e))
+PYEOF
+)
+
+    case "$result" in
+        ok)      ok "statsUserOnline já está habilitado." ;;
+        changed)
+            ok "statsUserOnline habilitado em ${config_path}"
+            if systemctl is-active --quiet xray 2>/dev/null; then
+                systemctl restart xray &>/dev/null
+                ok "Xray reiniciado para aplicar a configuração."
+            fi
+            ;;
+        *)
+            echo -e "${Y}  ⚠ Não foi possível atualizar o config do Xray: ${result}${N}"
+            ;;
+    esac
+}
+
 # ── iptables ──────────────────────────────────────────────────────────────────
 open_port() {
     local port=$1
@@ -181,6 +233,7 @@ install_service() {
     sleep 1
 
     open_port "$port"
+    fix_xray_stats_online
     install_wrapper
     install_menu_script
 
