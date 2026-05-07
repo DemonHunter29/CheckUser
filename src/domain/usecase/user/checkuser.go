@@ -59,7 +59,7 @@ func (c *CheckUserUseCase) Execute(ctx context.Context, username, deviceID strin
 	// Registra apenas o PRIMEIRO device do usuário (quando nenhum ainda está salvo).
 	// Conexões subsequentes com outros device IDs não sobrescrevem o device do dono.
 	deviceCount, _ := c.deviceRepository.CountByUsername(ctx, username)
-	if !deviceExists && !limitReached && deviceCount == 0 {
+	if !deviceExists && !limitReached && user.Limit > 0 && deviceCount < user.Limit {
 		if err := c.deviceRepository.Save(ctx, device); err != nil {
 			return nil, err
 		}
