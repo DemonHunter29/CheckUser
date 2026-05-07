@@ -126,9 +126,10 @@ PYEOF
         ok)      ok "statsUserOnline já está habilitado." ;;
         changed)
             ok "statsUserOnline habilitado em ${config_path}"
-            systemctl restart xray &>/dev/null \
-                && ok "Xray reiniciado para aplicar a configuração." \
-                || echo -e "${Y}  ⚠ Não foi possível reiniciar o Xray.${N}"
+            if systemctl is-active --quiet xray 2>/dev/null; then
+                systemctl restart xray &>/dev/null
+                ok "Xray reiniciado para aplicar a configuração."
+            fi
             ;;
         *)
             echo -e "${Y}  ⚠ Não foi possível atualizar o config do Xray: ${result}${N}"
