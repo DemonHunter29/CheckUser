@@ -142,17 +142,22 @@ func (x *xrayConnection) poll() {
 	log.Printf("[xray] poll %s: %d usuários com stats", x.addr, len(current))
 }
 
-// xrayExtractUsername extrai o email de "user>>>email@tag>>>traffic>>>..."
+// xrayExtractUsername extrai o username de "user>>>email>>>traffic>>>..."
+// Suporta email com @ (user>>>nome@tag>>>...) e sem @ (user>>>nome>>>...).
 func xrayExtractUsername(name string) string {
 	after, found := strings.CutPrefix(name, "user>>>")
 	if !found {
 		return ""
 	}
-	idx := strings.IndexByte(after, '@')
-	if idx <= 0 {
-		return ""
+	// Prefere o delimitador '@' (formato email@tag)
+	if idx := strings.IndexByte(after, '@'); idx > 0 {
+		return after[:idx]
 	}
-	return after[:idx]
+	// Fallback: sem '@', usa tudo até '>>>'
+	if idx := strings.Index(after, ">>>"); idx > 0 {
+		return after[:idx]
+	}
+	return ""
 }
 
 // ── gRPC / Protobuf ──────────────────────────────────────────────────────────
