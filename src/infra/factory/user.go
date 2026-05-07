@@ -2,6 +2,7 @@ package factory
 
 import (
 	"log"
+	"time"
 
 	"github.com/DemonHunter29/CheckUser/src/data"
 	"github.com/DemonHunter29/CheckUser/src/data/cache"
@@ -17,13 +18,13 @@ import (
 // Caminhos dos stats.json por protocolo. Se o arquivo não existir no server
 // (protocolo não instalado) o counter silenciosamente retorna 0.
 //
-// Sem TTL de staleness — o próprio server do tunnel (DTProto/HCP) é
-// responsável por remover entries do stats.json quando o usuário desconecta.
-// Aplicar TTL aqui causava falso "00/01" porque last_seen_at é atualizado
-// em intervalos de keep-alive (que podem ser mais longos que o TTL).
+// TTL de 5 minutos: descarta entradas cujo last_seen_at é mais velho que isso.
+// O keep-alive do HCP/DTProto atualiza last_seen_at a cada ~20s, então 5min
+// só expira se a sessão foi abruptamente encerrada sem cleanup do stats.json.
 const (
 	dtprotoStatsPath    = "/var/lib/proto-server/stats.json"
 	hcpStatsPath        = "/var/lib/hcp-server/stats.json"
+	statsStaleAfter     = 5 * time.Minute
 	xrayAPIAddrFallback = "127.0.0.1:1085"
 )
 
@@ -38,10 +39,10 @@ const (
 func buildCountChain(executor contract.Executor) contract.CountConnection {
 	countSSH := connection.NewSSHConnection(executor)
 
-	countDtProto := connection.NewStatsFileConnection(dtprotoStatsPath, 0)
+	countDtProto := connection.NewStatsFileConnection(dtprotoStatsPath, statsStaleAfter)
 	countSSH.SetNext(countDtProto)
 
-	countHcp := connection.NewStatsFileConnection(hcpStatsPath, 0)
+	countHcp := connection.NewStatsFileConnection(hcpStatsPath, statsStaleAfter)
 	countDtProto.SetNext(countHcp)
 
 	xrayAddr := dao.ResolveXrayAPIAddr()
